@@ -26,20 +26,20 @@ void
 procinit(void)
 {
   struct proc *p;
-  
+
   initlock(&pid_lock, "nextpid");
   for(p = proc; p < &proc[NPROC]; p++) {
-      initlock(&p->lock, "proc");
+    initlock(&p->lock, "proc");
 
-      // Allocate a page for the process's kernel stack.
-      // Map it high in memory, followed by an invalid
-      // guard page.
-      char *pa = kalloc();
-      if(pa == 0)
-        panic("kalloc");
-      uint64 va = KSTACK((int) (p - proc));
-      kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
-      p->kstack = va;
+    // Allocate a page for the process's kernel stack.
+    // Map it high in memory, followed by an invalid
+    // guard page.
+    char *pa = kalloc();
+    if (pa == 0)
+      panic("kalloc");
+    uint64 va = KSTACK((int) (p - proc));
+    p->pkstack = (uint64)pa;
+    p->kstack = va;
   }
   kvminithart();
 }
@@ -121,6 +121,16 @@ found:
     return 0;
   }
 
+  // set up per process kernel page table
+  p->kernel_pagetable = kvminit_for_proc();
+  if(p->kernel_pagetable == 0){
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+
+  kvmmap_for_proc(p->kernel_pagetable, p->kstack, p->pkstack, PGSIZE, PTE_R | PTE_W);
+
   // Set up new context to start executing at forkret,
   // which returns to user space.
   memset(&p->context, 0, sizeof(p->context));
@@ -150,6 +160,9 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+  if (p->kernel_pagetable)
+    freekernelpagetable_for_proc(p->kernel_pagetable);
+  p->kernel_pagetable = 0;
 }
 
 // Create a user page table for a given process,
@@ -473,16 +486,22 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+        w_satp(MAKE_SATP(p->kernel_pagetable));
+        sfence_vma();
         swtch(&c->context, &p->context);
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.
+        kvminithart();
         c->proc = 0;
 
         found = 1;
       }
       release(&p->lock);
     }
+
+    kvminithart();
+
 #if !defined (LAB_FS)
     if(found == 0) {
       intr_on();

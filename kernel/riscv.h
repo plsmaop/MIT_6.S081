@@ -185,6 +185,7 @@ w_mtvec(uint64 x)
 #define SATP_SV39 (8L << 60)
 
 #define MAKE_SATP(pagetable) (SATP_SV39 | (((uint64)pagetable) >> 12))
+#define MAKE_PGT(SATP) ((~SATP_SV39) & (((uint64)SATP) << 12))
 
 // supervisor address translation and protection;
 // holds the address of the page table.

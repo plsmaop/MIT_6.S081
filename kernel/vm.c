@@ -47,6 +47,44 @@ kvminit()
   kvmmap(TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
 }
 
+void
+kvmmap_for_proc(pagetable_t kernel_pgtbl_for_proc, uint64 va, uint64 pa, uint64 sz, int perm)
+{
+    if (mappages(kernel_pgtbl_for_proc, va, sz, pa, perm) != 0)
+      panic("kvmmap");
+}
+
+pagetable_t 
+kvminit_for_proc()
+{
+  pagetable_t kernel_pagetable = (pagetable_t) kalloc();
+  memset(kernel_pagetable, 0, PGSIZE);
+
+  // uart registers
+  kvmmap_for_proc(kernel_pagetable, UART0, UART0, PGSIZE, PTE_R | PTE_W);
+
+  // virtio mmio disk interface
+  kvmmap_for_proc(kernel_pagetable, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
+
+  // CLINT
+  kvmmap_for_proc(kernel_pagetable, CLINT, CLINT, 0x10000, PTE_R | PTE_W);
+
+  // PLIC
+  kvmmap_for_proc(kernel_pagetable, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
+
+  // map kernel text executable and read-only.
+  kvmmap_for_proc(kernel_pagetable, KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
+
+  // map kernel data and the physical RAM we'll make use of.
+  kvmmap_for_proc(kernel_pagetable, (uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
+
+  // map the trampoline for trap entry/exit to
+  // the highest virtual address in the kernel.
+  kvmmap_for_proc(kernel_pagetable, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
+
+  return kernel_pagetable;
+}
+
 // Switch h/w page table register to the kernel's page table,
 // and enable paging.
 void
@@ -79,8 +117,9 @@ walk(pagetable_t pagetable, uint64 va, int alloc)
     if(*pte & PTE_V) {
       pagetable = (pagetable_t)PTE2PA(*pte);
     } else {
-      if(!alloc || (pagetable = (pde_t*)kalloc()) == 0)
+      if(!alloc || (pagetable = (pde_t*)kalloc()) == 0) {
         return 0;
+      }
       memset(pagetable, 0, PGSIZE);
       *pte = PA2PTE(pagetable) | PTE_V;
     }
@@ -132,11 +171,15 @@ kvmpa(uint64 va)
   pte_t *pte;
   uint64 pa;
   
+  pagetable_t kernel_pagetable = (pagetable_t)MAKE_PGT(r_satp());
+  sfence_vma();
+
   pte = walk(kernel_pagetable, va, 0);
-  if(pte == 0)
+  if (pte == 0)
     panic("kvmpa");
-  if((*pte & PTE_V) == 0)
+  if ((*pte & PTE_V) == 0) {
     panic("kvmpa");
+  }
   pa = PTE2PA(*pte);
   return pa+off;
 }
@@ -287,6 +330,51 @@ freewalk(pagetable_t pagetable)
     }
   }
   kfree((void*)pagetable);
+}
+
+// Recursively free page-table pages.
+// All leaf mappings must already have been removed.
+static void
+freewalk_withoutleaves(pagetable_t pagetable)
+{
+  // there are 2^9 = 512 PTEs in a page table.
+  for(int i = 0; i < 512; i++){
+    pte_t pte = pagetable[i];
+    if((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0){
+      // this PTE points to a lower-level page table.
+      uint64 child = PTE2PA(pte);
+      freewalk_withoutleaves((pagetable_t)child);
+      pagetable[i] = 0;
+    }
+  }
+  kfree((void*)pagetable);
+}
+
+void
+freekernelpagetable_for_proc(pagetable_t kernel_pagetable)
+{
+  // uart registers
+  uvmunmap(kernel_pagetable, UART0, 1, 0);
+
+  // virtio mmio disk interface
+  uvmunmap(kernel_pagetable, VIRTIO0, 1, 0);
+
+  // CLINT
+  uvmunmap(kernel_pagetable, CLINT, 0x10000 / PGSIZE, 0);
+
+  // PLIC
+  uvmunmap(kernel_pagetable, PLIC, 0x400000 / PGSIZE, 0);
+
+  // map kernel text executable and read-only.
+  uvmunmap(kernel_pagetable, KERNBASE, ((uint64)etext-KERNBASE) / PGSIZE, 0);
+
+  // map kernel data and the physical RAM we'll make use of.
+  uvmunmap(kernel_pagetable, (uint64)etext, (PHYSTOP-(uint64)etext) / PGSIZE, 0);
+
+  // map the trampoline for trap entry/exit to
+  // the highest virtual address in the kernel.
+  uvmunmap(kernel_pagetable, TRAMPOLINE, 1, 0);
+  freewalk_withoutleaves(kernel_pagetable);
 }
 
 // Free user memory pages,
