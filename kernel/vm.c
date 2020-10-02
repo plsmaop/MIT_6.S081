@@ -441,8 +441,33 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   }
 }
 
-void
-vmprint(pagetable_t pg)
+static void
+__vmprint_rec(char *prefix, pagetable_t pgt)
 {
+// there are 2^9 = 512 PTEs in a page table.
+  for (int i = 0; i < 512; i++) {
+    pte_t pte = pgt[i];
+    uint64 pa = PTE2PA(pte);
+    if (pte & PTE_V) {
+      printf("%s..%d: pte %p pa %p\n", prefix, i, pte, pa);
 
+      if ((pte & (PTE_R|PTE_W|PTE_X)) == 0) {
+        // this PTE points to a lower-level page table.
+        char new_prefix[3 + strlen(prefix)+1];
+        new_prefix[0] = '.';
+        new_prefix[1] = '.';
+        new_prefix[2] = ' ';
+        memmove(new_prefix+3*sizeof(char), prefix, strlen(prefix)+1);
+
+        __vmprint_rec(new_prefix, (pagetable_t)pa);
+      }
+    }
+  }
+}
+
+void
+vmprint(pagetable_t pgt)
+{
+  printf("page table %p\n", pgt);
+  __vmprint_rec("", pgt);
 }
