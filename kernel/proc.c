@@ -241,6 +241,7 @@ userinit(void)
   safestrcpy(p->name, "initcode", sizeof(p->name));
   p->cwd = namei("/");
 
+  mapuvmtokvm(p->pagetable, p->kernel_pagetable, p->sz, 0);
   p->state = RUNNABLE;
 
   release(&p->lock);
@@ -255,6 +256,9 @@ growproc(int n)
   struct proc *p = myproc();
 
   sz = p->sz;
+  if (sz + n >= PLIC)
+    return -1;
+
   if(n > 0){
     if((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
       return -1;
@@ -262,6 +266,8 @@ growproc(int n)
   } else if(n < 0){
     sz = uvmdealloc(p->pagetable, sz, sz + n);
   }
+
+  mapuvmtokvm(p->pagetable, p->kernel_pagetable, sz, p->sz);
   p->sz = sz;
   return 0;
 }
@@ -307,6 +313,8 @@ fork(void)
   pid = np->pid;
 
   np->state = RUNNABLE;
+
+  mapuvmtokvm(np->pagetable, np->kernel_pagetable, np->sz, 0);
 
   release(&np->lock);
 
@@ -492,15 +500,13 @@ scheduler(void)
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.
-        kvminithart();
         c->proc = 0;
+        kvminithart();
 
         found = 1;
       }
       release(&p->lock);
     }
-
-    kvminithart();
 
 #if !defined (LAB_FS)
     if(found == 0) {

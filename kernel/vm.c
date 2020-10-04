@@ -184,6 +184,33 @@ kvmpa(uint64 va)
   return pa+off;
 }
 
+void
+mapuvmtokvm(pagetable_t pagetable, pagetable_t kernel_pagetable, uint64 newsz, uint64 oldsz)
+{
+  uint64 va;
+  pte_t *user_pte;
+  pte_t *kernel_pte;
+
+  if (newsz >= PLIC)
+    panic("mapuvmtokvm: cannot map above PLIC");
+
+  for (va = oldsz; va < newsz; va += PGSIZE) {
+    user_pte = walk(pagetable, va, 0);
+    if (user_pte == 0)
+      panic("mapuvmtokvm: user_pte doesn't exist");
+
+    if ((*user_pte & PTE_V) == 0)
+      panic("mapuvmtokvm: invalid user_pte");
+
+    kernel_pte = walk(kernel_pagetable, va, 1);
+    if (kernel_pte == 0)
+      panic("mapuvmtokvm: kernel_pte allocation fail");
+
+    *kernel_pte = *user_pte;
+    *kernel_pte &= ~(PTE_U|PTE_W|PTE_X);
+  }
+}
+
 // Create PTEs for virtual addresses starting at va that refer to
 // physical addresses starting at pa. va and size might not
 // be page-aligned. Returns 0 on success, -1 if walk() couldn't
@@ -467,6 +494,8 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 int
 copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 {
+
+  return copyin_new(pagetable, dst, srcva, len);
   uint64 n, va0, pa0;
 
   while(len > 0){
@@ -493,6 +522,8 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 int
 copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 {
+
+  return copyinstr_new(pagetable, dst, srcva, max);
   uint64 n, va0, pa0;
   int got_null = 0;
 
