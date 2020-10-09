@@ -108,7 +108,7 @@ found:
   p->pid = allocpid();
 
   // Allocate a trapframe page.
-  if((p->trapframe = (struct trapframe *)kalloc()) == 0){
+  if((p->trapframe = (struct trapframe *)kalloc()) == 0) {
     release(&p->lock);
     return 0;
   }
@@ -128,6 +128,7 @@ found:
   p->context.sp = p->kstack + PGSIZE;
 
   // trap lab
+  p->is_handling = 0;
   p->remain_alarm_tick = 0;
   p->alarm_handler_addr = 0;
   p->alarm_interval = 0;
@@ -701,4 +702,27 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+void
+backup_trapframe_and_ctx_for_alarm(void)
+{
+  struct proc *p = myproc();
+  if ((p->trapframe_for_alarm = (struct trapframe *)kalloc()) == 0) {
+    panic("no memory for alarm");
+  }
+
+  memmove((void*)p->trapframe_for_alarm, (void*)p->trapframe, sizeof(struct trapframe));
+  memmove((void*)&p->context_for_alarm, (void*)&p->context, sizeof(struct context));
+  p->is_handling = 1;
+}
+
+void
+restore_trapframe_and_ctx_for_alarm(void)
+{
+  struct proc *p = myproc();
+  memmove((void*)p->trapframe, (void*)p->trapframe_for_alarm, sizeof(struct trapframe));
+  memmove((void*)&p->context, (void*)&p->context_for_alarm, sizeof(struct context));
+  p->is_handling = 0;
+  kfree(p->trapframe_for_alarm);
 }

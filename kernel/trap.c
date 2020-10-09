@@ -77,12 +77,15 @@ usertrap(void)
     exit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2) {
+  if (which_dev == 2) {
     if (p->alarm_interval != 0) {
       p->remain_alarm_tick--;
 
-      if (p->remain_alarm_tick == 0) {
+      if (p->remain_alarm_tick == 0 && p->is_handling == 0) {
         p->remain_alarm_tick = p->alarm_interval;
+
+        // sotre state
+        backup_trapframe_and_ctx_for_alarm();
 
         // change sepc
         p->trapframe->epc = p->alarm_handler_addr;

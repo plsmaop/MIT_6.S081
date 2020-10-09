@@ -118,5 +118,6 @@ sys_sigalarm(void)
 uint64
 sys_sigreturn(void)
 {
+  restore_trapframe_and_ctx_for_alarm();
   return 0;
 }

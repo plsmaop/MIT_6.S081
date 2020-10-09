@@ -95,7 +95,12 @@ struct proc {
   int pid;                     // Process ID
   int alarm_interval;
   int remain_alarm_tick;
+
+  // lab trap
+  int is_handling;
   uint64 alarm_handler_addr;
+  struct trapframe *trapframe_for_alarm;
+  struct context context_for_alarm;
 
   // these are private to the process, so p->lock need not be held.
   uint64 kstack;               // Virtual address of kernel stack
