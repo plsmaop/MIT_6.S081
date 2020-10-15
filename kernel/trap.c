@@ -65,6 +65,21 @@ usertrap(void)
     intr_on();
 
     syscall();
+  } else if (r_scause() == 13 || r_scause() == 15) {
+    char *mem;
+    uint64 page_fault_addr;
+
+    mem = kalloc();
+    if (mem == 0) {
+      panic("usertrap: No more memory for lazy page fault");
+    }
+
+    memset(mem, 0, PGSIZE);
+    page_fault_addr = PGROUNDDOWN(r_stval());
+    if (mappages(p->pagetable, page_fault_addr, PGSIZE, (uint64)mem, PTE_W|PTE_X|PTE_R|PTE_U) != 0) {
+      kfree(mem);
+      panic("usertrap: lazy page map fail");
+    }
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {
