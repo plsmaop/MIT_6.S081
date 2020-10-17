@@ -29,6 +29,37 @@ trapinithart(void)
   w_stvec((uint64)kernelvec);
 }
 
+static void
+handle_page_fault(struct proc *p)
+{
+  char *mem;
+  uint64 page_fault_addr;
+
+  page_fault_addr = r_stval();
+  // printf("page fault: %p\n", page_fault_addr);
+  if (page_fault_addr > p->sz) {
+    printf("page fault addr exceed sbrk() size, pid = %d\n", p->pid);
+    printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+    p->killed = 1;
+    return;
+  }
+
+  mem = kalloc();
+  if (mem == 0) {
+    printf("No more memory for lazy page fault, pid = %d\n", p->pid);
+    printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+    p->killed = 1;
+    return;
+  } 
+
+  memset(mem, 0, PGSIZE);
+  page_fault_addr = PGROUNDDOWN(page_fault_addr);
+  if (mappages(p->pagetable, page_fault_addr, PGSIZE, (uint64)mem, PTE_W|PTE_R|PTE_U) != 0) {
+    kfree(mem);
+    panic("lazy page map fail");
+  }
+}
+
 //
 // handle an interrupt, exception, or system call from user space.
 // called from trampoline.S
@@ -66,20 +97,7 @@ usertrap(void)
 
     syscall();
   } else if (r_scause() == 13 || r_scause() == 15) {
-    char *mem;
-    uint64 page_fault_addr;
-
-    mem = kalloc();
-    if (mem == 0) {
-      panic("usertrap: No more memory for lazy page fault");
-    }
-
-    memset(mem, 0, PGSIZE);
-    page_fault_addr = PGROUNDDOWN(r_stval());
-    if (mappages(p->pagetable, page_fault_addr, PGSIZE, (uint64)mem, PTE_W|PTE_X|PTE_R|PTE_U) != 0) {
-      kfree(mem);
-      panic("usertrap: lazy page map fail");
-    }
+    handle_page_fault(p);
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {

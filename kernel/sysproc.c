@@ -41,14 +41,21 @@ sys_wait(void)
 uint64
 sys_sbrk(void)
 {
+  struct proc *p;
   int addr;
   int n;
 
-  if(argint(0, &n) < 0)
+  if (argint(0, &n) < 0)
     return -1;
-  addr = myproc()->sz;
-  myproc()->sz += n;
 
+  p = myproc();
+  addr = p->sz;
+  if (n < 0) {
+    printf("sbrk(): shrink memory: %p, pages: %d\n", PGROUNDUP(addr), (PGROUNDUP(addr) - PGROUNDUP(-n))/PGSIZE);
+    uvmdealloc(p->pagetable, addr, addr + n);
+  }
+
+  p->sz += n;
   return addr;
 }
 
