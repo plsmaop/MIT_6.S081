@@ -36,6 +36,13 @@ handle_page_fault(struct proc *p)
   uint64 page_fault_addr;
 
   page_fault_addr = r_stval();
+
+  if (page_fault_addr < p->trapframe->sp) {
+    // invalid address
+    p->killed = 1;
+    return;
+  }
+
   // printf("page fault: %p\n", page_fault_addr);
   if (page_fault_addr > p->sz) {
     printf("page fault addr exceed sbrk() size, pid = %d\n", p->pid);
