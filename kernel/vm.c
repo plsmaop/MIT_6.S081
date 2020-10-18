@@ -5,6 +5,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -15,6 +17,7 @@ extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
 
+void vmprint(pagetable_t);
 /*
  * create a direct-map page table for the kernel.
  */
@@ -101,10 +104,27 @@ walkaddr(pagetable_t pagetable, uint64 va)
     return 0;
 
   pte = walk(pagetable, va, 0);
-  if(pte == 0)
+  if (pte == 0) {
     return 0;
-  if((*pte & PTE_V) == 0)
-    return 0;
+  }
+
+  if ((*pte & PTE_V) == 0) {
+    if (PGROUNDUP(va) + PGSIZE > myproc()->sz) {
+      return 0;
+    }
+
+    char *mem = kalloc();
+    if (mem == 0) {
+      return 0;
+    } 
+
+    memset(mem, 0, PGSIZE);
+    if (mappages(pagetable, va, PGSIZE, (uint64)mem, PTE_W|PTE_R|PTE_U) != 0) {
+      kfree(mem);
+      return 0;
+    }
+  }
+
   if((*pte & PTE_U) == 0)
     return 0;
   pa = PTE2PA(*pte);
@@ -184,7 +204,7 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
       continue;
       // panic("uvmunmap: walk");
     }
-      
+
     if ((*pte & PTE_V) == 0) {
       continue;
     }
