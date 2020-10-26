@@ -34,23 +34,26 @@ cow_page_fault(pagetable_t pagetable, uint64 va)
 {
   uint64 original_pa, new_pa;
   if (va >= MAXVA) {
+    printf("cow_page_fault: va %p too large\n", va);
     return -1;
   }
 
   pte_t *pte = walk(pagetable, va, 0);
   if (!pte || !(*pte & PTE_U) || !(*pte & PTE_V)) {
+    printf("cow_page_fault: invalid PTE: %p\n", *pte);
     return -1;
   }
 
   original_pa = PTE2PA(*pte);
   new_pa = (uint64)kalloc();
   if (!new_pa) {
+    printf("cow_page_fault: no memory for kalloc()\n");
     return -1;
   }
 
   memmove((void*)new_pa, (void*)original_pa, PGSIZE);
   kfree((void*)original_pa);
-  *pte = PA2PTE(new_pa) | PTE_V | PTE_U | PTE_W | PTE_R;
+  *pte = PA2PTE(new_pa) | PTE_V | PTE_U | PTE_W | PTE_R | PTE_X;
 
   return 0;
 }

@@ -330,7 +330,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 
     increaserefcount(pa);
 
-    if(mappages(new, i, PGSIZE, (uint64)pa, flags) != 0){
+    if(mappages(new, i, PGSIZE, pa, flags) != 0){
       // kfree(mem);
       goto err;
     }
