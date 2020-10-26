@@ -49,13 +49,13 @@ increaserefcount(uint64 pa)
 {
   acquire(&kmem.lock);
   int page_num = pa / PGSIZE;
-  if (kmem.refcount[page_num] < 1) {
+  if (pa >= PHYSTOP || kmem.refcount[page_num] < 1) {
     panic("increaserefcount on zero reference count");
     release(&kmem.lock);
     return;
   }
 
-  kmem.refcount[page_num]--;
+  kmem.refcount[page_num]++;
   release(&kmem.lock);
 }
 
