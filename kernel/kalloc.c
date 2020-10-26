@@ -21,6 +21,7 @@ struct run {
 struct {
   struct spinlock lock;
   struct run *freelist;
+  int refcount[PHYSTOP / PGSIZE];
 } kmem;
 
 void
@@ -35,8 +36,27 @@ freerange(void *pa_start, void *pa_end)
 {
   char *p;
   p = (char*)PGROUNDUP((uint64)pa_start);
-  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
+  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE) {
+    // avoid panic
+    kmem.refcount[(uint64)p/PGSIZE] = 1;
     kfree(p);
+  }
+}
+
+// pa must be aligned
+void
+increaserefcount(uint64 pa)
+{
+  acquire(&kmem.lock);
+  int page_num = pa / PGSIZE;
+  if (kmem.refcount[page_num] < 1) {
+    panic("increaserefcount on zero reference count");
+    release(&kmem.lock);
+    return;
+  }
+
+  kmem.refcount[page_num]--;
+  release(&kmem.lock);
 }
 
 // Free the page of physical memory pointed at by v,
@@ -51,12 +71,23 @@ kfree(void *pa)
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
 
+  acquire(&kmem.lock);
+  int page_num = (uint64)pa / PGSIZE;
+  if (kmem.refcount[page_num] < 1) {
+    panic("kfree free referece count 0");
+  }
+
+  kmem.refcount[page_num]--;
+
+  if (kmem.refcount[page_num] > 0) {
+    release(&kmem.lock);
+    return;
+  }
+
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
 
   r = (struct run*)pa;
-
-  acquire(&kmem.lock);
   r->next = kmem.freelist;
   kmem.freelist = r;
   release(&kmem.lock);
@@ -72,8 +103,16 @@ kalloc(void)
 
   acquire(&kmem.lock);
   r = kmem.freelist;
-  if(r)
+  if(r) {
     kmem.freelist = r->next;
+    int page_num = (uint64)r/PGSIZE;
+    if (kmem.refcount[page_num] != 0) {
+      panic("kalloc realloc");
+    }
+
+    kmem.refcount[page_num] = 1;
+  }
+    
   release(&kmem.lock);
 
   if(r)
