@@ -120,6 +120,9 @@ kalloc(void)
     release(&kmem[hart].lock);
     r = steal(hart);
     acquire(&kmem[hart].lock);
+    // avoid memory leak
+    if (r)
+      r->next = kmem[hart].freelist;
   }
 
   if(r)
