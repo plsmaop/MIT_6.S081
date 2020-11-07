@@ -23,13 +23,17 @@ struct {
   struct run *freelist;
 } kmem[NCPU];
 
+// for stealing free page from other cpu
+struct spinlock global_lock;
+
 void
 kinit()
 {
   for (int i = 0; i < NCPU; ++i) {
     initlock(&kmem[i].lock, "kmem");
   }
-  
+
+  initlock(&global_lock, "kmem_global_lock");
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -38,8 +42,45 @@ freerange(void *pa_start, void *pa_end)
 {
   char *p;
   p = (char*)PGROUNDUP((uint64)pa_start);
-  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
-    kfree(p);
+
+  int hart = cpuid();
+  acquire(&kmem[hart].lock);
+  struct run *r;
+  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE) {
+    memset(p, 1, PGSIZE);
+    r = (struct run*)p;
+    r->next = kmem[hart].freelist;
+    kmem[hart].freelist = r;
+  }
+
+  release(&kmem[hart].lock);
+}
+
+void *
+steal(int hart)
+{
+  // acquire(&global_lock);
+  for (int start = (hart + 1);; ++start) {
+    int i = start % NCPU;
+    if (i == hart) {
+      // release(&global_lock);
+      return 0;
+    }
+
+    acquire(&kmem[i].lock);
+    struct run *r = kmem[i].freelist;
+    if (r) {
+      kmem[i].freelist = r->next;
+      r->next = 0;
+      release(&kmem[i].lock);
+      // release(&global_lock);
+      return (void*)r;
+    }
+    release(&kmem[i].lock);
+  }
+  // release(&global_lock);
+
+  return 0;
 }
 
 // Free the page of physical memory pointed at by v,
@@ -61,13 +102,12 @@ kfree(void *pa)
 
   push_off();
   int hart = cpuid();
+  pop_off();
 
   acquire(&kmem[hart].lock);
   r->next = kmem[hart].freelist;
   kmem[hart].freelist = r;
   release(&kmem[hart].lock);
-
-  pop_off();
 }
 
 // Allocate one 4096-byte page of physical memory.
@@ -80,14 +120,19 @@ kalloc(void)
 
   push_off();
   int hart = cpuid();
+  pop_off();
 
   acquire(&kmem[hart].lock);
   r = kmem[hart].freelist;
+  if (!r) {
+    release(&kmem[hart].lock);
+    r = steal(hart);
+    acquire(&kmem[hart].lock);
+  }
+
   if(r)
     kmem[hart].freelist = r->next;
   release(&kmem[hart].lock);
-
-  pop_off();
 
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
