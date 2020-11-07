@@ -23,9 +23,6 @@ struct {
   struct run *freelist;
 } kmem[NCPU];
 
-// for stealing free page from other cpu
-struct spinlock global_lock;
-
 void
 kinit()
 {
@@ -33,7 +30,6 @@ kinit()
     initlock(&kmem[i].lock, "kmem");
   }
 
-  initlock(&global_lock, "kmem_global_lock");
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -59,11 +55,9 @@ freerange(void *pa_start, void *pa_end)
 void *
 steal(int hart)
 {
-  // acquire(&global_lock);
   for (int start = (hart + 1);; ++start) {
     int i = start % NCPU;
     if (i == hart) {
-      // release(&global_lock);
       return 0;
     }
 
@@ -73,12 +67,10 @@ steal(int hart)
       kmem[i].freelist = r->next;
       r->next = 0;
       release(&kmem[i].lock);
-      // release(&global_lock);
       return (void*)r;
     }
     release(&kmem[i].lock);
   }
-  // release(&global_lock);
 
   return 0;
 }
