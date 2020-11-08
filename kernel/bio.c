@@ -24,7 +24,7 @@
 #include "buf.h"
 
 #define NBUCKET 13
-
+#define DEBUG 0
 struct {
   struct spinlock lock;
   struct buf buf[NBUF];
@@ -73,6 +73,9 @@ bget(uint dev, uint blockno)
   // acquire(&bcache.lock);
 
   int shard = blockno % NBUCKET;
+#if DEBUG  
+  printf("try acquire: %d\n", shard);
+#endif
   acquire(&locks[shard]);
 
   // Is the block already cached ?
@@ -85,14 +88,23 @@ bget(uint dev, uint blockno)
       release(&tickslock);
 
       release(&locks[shard]);
+#if DEBUG  
+      printf("get buf, release %d\n", shard);
+#endif
       acquiresleep(&b->lock);
       return b;
     }
   }
   release(&locks[shard]);
+#if DEBUG  
+  printf("get no buf, release %d\n", shard);
+#endif
 
   // Not cached.
   // Recycle the least recently used (LRU) unused buffer.
+#if DEBUG 
+  printf("try acquire: bcache lock\n");
+#endif
   acquire(&bcache.lock);
   acquire(&tickslock);
   int cur_ticks = ticks;
@@ -113,8 +125,12 @@ bget(uint dev, uint blockno)
     panic("bget: no buffers");
   }
 
+#if DEBUG 
+  printf("try acquire: %d for new buf\n", shard);
+#endif
   acquire(&locks[shard]);
 
+  b = &bcache.buf[buf_ind];
   b->dev = dev;
   b->blockno = blockno;
   b->valid = 0;
@@ -123,7 +139,13 @@ bget(uint dev, uint blockno)
   b->shard = shard;
 
   release(&locks[shard]);
+#if DEBUG 
+  printf("modified new buf, release %d\n", shard);
+#endif
   release(&bcache.lock);
+#if DEBUG 
+  printf("release bcache lock\n");
+#endif
   acquiresleep(&b->lock);
   return b;
 }
@@ -162,14 +184,22 @@ brelse(struct buf *b)
   releasesleep(&b->lock);
 
   int shard = b->shard;
+#if DEBUG 
+  printf("try acquire %d for brelease\n", shard);
+#endif
   acquire(&locks[shard]);
   b->refcnt--;
   if (b->refcnt == 0) {
     // no one is waiting for it.
-
+    b->shard = -1;
+    b->blockno = -1;
+    b->dev = -1;
   }
   
   release(&locks[shard]);
+#if DEBUG 
+  printf("finish brelease, release %d\n", shard);
+#endif
 }
 
 void
