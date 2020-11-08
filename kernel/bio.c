@@ -44,12 +44,12 @@ binit(void)
 
   initlock(&bcache.lock, "bcache");
   for (int i = 0; i < NBUCKET; ++i) {
-    initlock(&locks[i], "bcache");
+    initlock(&locks[i], "bucket");
   }
 
   // Create linked list of buffers
-  bcache.head.prev = &bcache.head;
-  bcache.head.next = &bcache.head;
+  // bcache.head.prev = &bcache.head;
+  // bcache.head.next = &bcache.head;
   for (b = bcache.buf; b < bcache.buf+NBUF; b++) {
     // b->next = bcache.head.next;
     // b->prev = &bcache.head;
@@ -92,13 +92,10 @@ bget(uint dev, uint blockno)
       printf("get buf, release %d\n", shard);
 #endif
       acquiresleep(&b->lock);
+      // printf("get buf for block %d, release %d\n", b->blockno, shard);
       return b;
     }
   }
-  release(&locks[shard]);
-#if DEBUG  
-  printf("get no buf, release %d\n", shard);
-#endif
 
   // Not cached.
   // Recycle the least recently used (LRU) unused buffer.
@@ -128,8 +125,6 @@ bget(uint dev, uint blockno)
 #if DEBUG 
   printf("try acquire: %d for new buf\n", shard);
 #endif
-  acquire(&locks[shard]);
-
   b = &bcache.buf[buf_ind];
   b->dev = dev;
   b->blockno = blockno;
@@ -138,13 +133,13 @@ bget(uint dev, uint blockno)
   b->ticks = cur_ticks;
   b->shard = shard;
 
-  release(&locks[shard]);
-#if DEBUG 
-  printf("modified new buf, release %d\n", shard);
-#endif
   release(&bcache.lock);
 #if DEBUG 
   printf("release bcache lock\n");
+#endif
+  release(&locks[shard]);
+#if DEBUG 
+  printf("modified new buf, release %d\n", shard);
 #endif
   acquiresleep(&b->lock);
   return b;
@@ -156,10 +151,12 @@ bread(uint dev, uint blockno)
 {
   struct buf *b;
 
+  // printf("bread dev: %d lock: %d\n", dev, blockno);
   b = bget(dev, blockno);
   if(!b->valid) {
     virtio_disk_rw(b, 0);
     b->valid = 1;
+    // printf("read dev: %d block %d\n", b->dev, b->blockno);
   }
   return b;
 }
@@ -171,6 +168,7 @@ bwrite(struct buf *b)
   if(!holdingsleep(&b->lock))
     panic("bwrite");
   virtio_disk_rw(b, 1);
+  // printf("write block %d\n", b->blockno);
 }
 
 // Release a locked buffer.
