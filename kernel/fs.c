@@ -425,6 +425,7 @@ bmap(struct inode *ip, uint bn)
       log_write(bp);
     }
     brelse(bp);
+
     return addr;
   }
 

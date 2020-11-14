@@ -165,6 +165,60 @@ bad:
   return -1;
 }
 
+uint64
+sys_symlink(void)
+{
+  char name[DIRSIZ], target[MAXPATH], path[MAXPATH];
+  struct inode *dp, *ip;
+
+  memset(name, 0, DIRSIZ);
+  memset(target, 0, MAXPATH);
+  memset(path, 0, MAXPATH);
+
+  if(argstr(0, target, MAXPATH) < 0 || argstr(1, path, MAXPATH) < 0)
+    return -1;
+
+  begin_op();
+  if ((dp = nameiparent(path, name)) == 0) {
+    end_op();
+    return -1;
+  }
+
+  ilock(dp);
+  if ((ip = dirlookup(dp, name, 0)) != 0) {
+    iunlockput(dp);
+    end_op();
+    return -1;
+  }
+
+  if ((ip = ialloc(dp->dev, T_SYMLINK)) == 0) {
+    iunlockput(dp);
+    end_op();
+    return -1;
+  }
+    
+  ilock(ip);
+  ip->nlink = 1;
+  iupdate(ip);
+
+  if (writei(ip, 0, (uint64)target, 0, strlen(target)) != strlen(target)) {
+
+    iunlockput(ip);
+    iunlockput(dp);
+    end_op();
+    return -1;
+  }
+
+  if (dirlink(dp, name, ip->inum) < 0)
+    panic("create: dirlink");
+
+  iunlockput(ip);
+  iunlockput(dp);
+  end_op();
+
+  return 0;
+}
+
 // Is the directory dp empty except for "." and ".." ?
 static int
 isdirempty(struct inode *dp)
@@ -283,6 +337,34 @@ create(char *path, short type, short major, short minor)
   return ip;
 }
 
+static struct inode*
+followsymlink(struct inode *ip, int count)
+{
+  if (count > 10) {
+    return 0;
+  }
+
+  char symlink[MAXPATH];
+  memset(symlink, 0, MAXPATH);
+
+  if ((readi(ip, 0, (uint64)symlink, 0, ip->size)) != ip->size) {
+    iunlockput(ip);
+    return 0;
+  }
+
+  iunlockput(ip);
+  if ((ip = namei(symlink)) == 0) {
+    return 0;
+  }
+
+  ilock(ip);
+  if (ip->type == T_SYMLINK) {
+    return followsymlink(ip, count+1);
+  }
+
+  return ip;
+}
+
 uint64
 sys_open(void)
 {
@@ -309,6 +391,13 @@ sys_open(void)
       return -1;
     }
     ilock(ip);
+    if (ip->type == T_SYMLINK && !(omode & O_NOFOLLOW)) {
+      if ((ip = followsymlink(ip, 0)) == 0) {
+        end_op();
+        return -1;
+      }
+    }
+
     if(ip->type == T_DIR && omode != O_RDONLY){
       iunlockput(ip);
       end_op();
