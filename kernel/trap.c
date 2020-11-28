@@ -29,6 +29,14 @@ trapinithart(void)
   w_stvec((uint64)kernelvec);
 }
 
+static void
+handle_mmap_trap(struct proc *p)
+{
+  if (mmap_trap(p) < 0) {
+    p->killed = 1;
+  }
+}
+
 //
 // handle an interrupt, exception, or system call from user space.
 // called from trampoline.S
@@ -65,6 +73,8 @@ usertrap(void)
     intr_on();
 
     syscall();
+  } else if (r_scause() == 13 || r_scause() == 15) {
+    handle_mmap_trap(p);
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {

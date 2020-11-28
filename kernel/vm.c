@@ -1,12 +1,15 @@
 #include "param.h"
 #include "types.h"
 #include "spinlock.h"
+#include "sleeplock.h"
 #include "memlayout.h"
 #include "elf.h"
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
 #include "proc.h"
+#include "fcntl.h"
+#include "file.h"
 
 /*
  * the kernel's page table.
@@ -439,6 +442,7 @@ struct VMA {
   struct file *file;
   int permission;
   int flags;
+  int pid;
 };
 
 struct VMA VMAs[VMASIZE];
@@ -469,12 +473,15 @@ sys_mmap(void)
   }
 
   filedup(f);
-  vma->permission = prot;
-  vma->flags = flags;
-  vma->file = f;
   p = myproc();
   addr = p->sz;
   p->sz += len; 
+  vma->permission = prot;
+  vma->flags = flags;
+  vma->file = f;
+  vma->pid = p->pid;
+  vma->addr = addr;
+  vma->len = len;
 
   return addr;
 }
@@ -482,5 +489,66 @@ sys_mmap(void)
 uint64
 sys_munmap(void)
 {
+  panic("NOT YET");
   return 0;
+}
+
+int
+mmap_trap(struct proc *p)
+{
+  int pid = p->pid;
+  struct VMA *vma = 0;
+  uint64 page_fault_addr;
+  char *mem;
+
+  for (int i = 0; i < VMASIZE; ++i) {
+    if (VMAs[i].file && VMAs[i].pid == pid) {
+      vma = &VMAs[i];
+      break;
+    }
+  }
+
+  if (!vma) {
+    return 0;
+  }
+
+  page_fault_addr = r_stval();
+  if (page_fault_addr < vma->addr || page_fault_addr >= vma->addr + vma->len) {
+    printf("r_stval(): %p, addr: %p, len: %d\n", page_fault_addr, vma->addr, vma->len);
+    return 0;
+  }
+
+  mem = kalloc();
+  if (!mem) {
+    panic("kalloc");
+    return -1;
+  }
+
+  memset(mem, 0, PGSIZE);
+  uint64 start_addr = PGROUNDDOWN(page_fault_addr);
+  int per = PTE_R | PTE_U;
+  if (vma->permission & PROT_WRITE) {
+    per |= PTE_W;
+  }
+
+  if (mappages(p->pagetable, start_addr, PGSIZE, (uint64)mem, per) != 0) {
+    kfree(mem);
+    panic("mmap fail for map lazy page");
+  }
+
+  uint off = page_fault_addr - vma->addr, n = PGSIZE - (page_fault_addr - start_addr);
+  if (off + n > vma->len) {
+    n = vma->len - off;
+  }
+
+  struct inode *ip = vma->file->ip;
+  ilock(ip);
+  int success = 0;
+  if (readi(ip, 1, page_fault_addr, off, n) < 0) {
+    panic("readi");
+    success = -1;
+  } 
+  iunlock(ip);
+
+  return success;
 }
