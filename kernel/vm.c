@@ -1,10 +1,12 @@
 #include "param.h"
 #include "types.h"
+#include "spinlock.h"
 #include "memlayout.h"
 #include "elf.h"
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -430,10 +432,51 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   }
 }
 
+#define VMASIZE 16
+struct VMA {
+  uint64 addr;
+  uint64 len;
+  struct file *file;
+  int permission;
+  int flags;
+};
+
+struct VMA VMAs[VMASIZE];
+
 uint64
 sys_mmap(void)
 {
-  return 0;
+  uint64 len, addr;
+  int prot, flags;
+  struct file *f;
+  struct proc *p;
+
+  // omit addr and offset
+  if (argaddr(1, &len) < 0 || argint(2, &prot) < 0 || argint(3, &flags) < 0 || argfd(4, 0, &f) < 0) {
+    return 0xffffffffffffffff;
+  }
+
+  struct VMA *vma = 0;
+  for (int i = 0; i < VMASIZE; ++i) {
+    if (!VMAs[i].file) {
+      vma = &VMAs[i];
+    }
+  }
+
+  if (!vma) {
+    // fail
+    return 0xffffffffffffffff;
+  }
+
+  filedup(f);
+  vma->permission = prot;
+  vma->flags = flags;
+  vma->file = f;
+  p = myproc();
+  addr = p->sz;
+  p->sz += len; 
+
+  return addr;
 }
 
 uint64
