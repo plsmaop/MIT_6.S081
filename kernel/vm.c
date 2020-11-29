@@ -115,10 +115,27 @@ walkaddr(pagetable_t pagetable, uint64 va)
     return 0;
 
   pte = walk(pagetable, va, 0);
-  if(pte == 0)
+  if (pte == 0) {
     return 0;
-  if((*pte & PTE_V) == 0)
-    return 0;
+  }
+
+  if ((*pte & PTE_V) == 0) {
+    if (PGROUNDUP(va) + PGSIZE > myproc()->sz) {
+      return 0;
+    }
+
+    char *mem = kalloc();
+    if (mem == 0) {
+      return 0;
+    } 
+
+    memset(mem, 0, PGSIZE);
+    if (mappages(pagetable, va, PGSIZE, (uint64)mem, PTE_W|PTE_R|PTE_U) != 0) {
+      kfree(mem);
+      return 0;
+    }
+  }
+
   if((*pte & PTE_U) == 0)
     return 0;
   pa = PTE2PA(*pte);
@@ -133,6 +150,26 @@ kvmmap(pagetable_t kpgtbl, uint64 va, uint64 pa, uint64 sz, int perm)
 {
   if(mappages(kpgtbl, va, sz, pa, perm) != 0)
     panic("kvmmap");
+}
+
+// translate a kernel virtual address to
+// a physical address. only needed for
+// addresses on the stack.
+// assumes va is page aligned.
+uint64
+kvmpa(uint64 va)
+{
+  uint64 off = va % PGSIZE;
+  pte_t *pte;
+  uint64 pa;
+  
+  pte = walk(kernel_pagetable, va, 0);
+  if(pte == 0)
+    panic("kvmpa");
+  if((*pte & PTE_V) == 0)
+    panic("kvmpa");
+  pa = PTE2PA(*pte);
+  return pa+off;
 }
 
 // Create PTEs for virtual addresses starting at va that refer to
@@ -172,12 +209,17 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
 
   if((va % PGSIZE) != 0)
     panic("uvmunmap: not aligned");
-
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
-    if((pte = walk(pagetable, a, 0)) == 0)
-      panic("uvmunmap: walk");
-    if((*pte & PTE_V) == 0)
-      panic("uvmunmap: not mapped");
+    if((pte = walk(pagetable, a, 0)) == 0) {
+      // no page exist
+      continue;
+      // panic("uvmunmap: walk");
+    }
+
+    if ((*pte & PTE_V) == 0) {
+      continue;
+    }
+      // panic("uvmunmap: not mapped");
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
     if(do_free){
@@ -308,10 +350,16 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
-    if((pte = walk(old, i, 0)) == 0)
-      panic("uvmcopy: pte should exist");
-    if((*pte & PTE_V) == 0)
-      panic("uvmcopy: page not present");
+    if((pte = walk(old, i, 0)) == 0) {
+      // panic("uvmcopy: pte should exist");
+      continue;
+    }
+      // panic("uvmcopy: pte should exist");
+    if((*pte & PTE_V) == 0) {
+      // non allocated memory
+      continue;
+    }
+      // panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
     if((mem = kalloc()) == 0)
@@ -439,6 +487,7 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 struct VMA {
   uint64 addr;
   uint64 len;
+  uint64 original_addr;
   struct file *file;
   int permission;
   int flags;
@@ -472,6 +521,10 @@ sys_mmap(void)
     return 0xffffffffffffffff;
   }
 
+  if ((prot & PROT_WRITE) && !f->writable && !(flags & MAP_PRIVATE)) {
+    return 0xffffffffffffffff;
+  }
+
   filedup(f);
   p = myproc();
   addr = p->sz;
@@ -482,15 +535,75 @@ sys_mmap(void)
   vma->pid = p->pid;
   vma->addr = addr;
   vma->len = len;
+  vma->original_addr = addr;
 
   return addr;
+}
+
+int
+unmmap(uint64 addr, uint len)
+{
+  struct VMA *vma = 0;
+  struct proc *p = myproc();
+  for (int i = 0; i < VMASIZE; ++i) {
+    if (VMAs[i].file && VMAs[i].pid == p->pid) {
+      vma = &VMAs[i];
+      break;
+    }
+  }
+
+  if (!vma || vma->addr > addr || vma->addr + vma->len < addr + len) {
+    return -1;
+  }
+
+  if (vma->flags & MAP_SHARED) {
+    // write back
+    if (filewrite_withoff(vma->file, addr, addr - vma->original_addr, len) < 0) {
+      panic("filewrite_withoff");
+    }
+  }
+
+  if (addr == vma->addr) {
+    vma->addr = addr + len;
+  }
+  
+  vma->len -= len;
+
+  if (vma->len == 0) {
+    fileclose(vma->file);
+    vma->pid = -1;
+    vma->file = 0;
+    vma->addr = 0;
+    vma->original_addr = 0;
+    vma->len = 0;
+    vma->permission = 0;
+    vma->flags = 0;
+  }
+
+  uint64 start_addr = PGROUNDDOWN(addr);
+  if (start_addr < addr) {
+    start_addr += PGSIZE;
+  }
+  int page_to_unmap = 0;
+
+  while (start_addr + PGSIZE <= addr + len) {
+    ++page_to_unmap;
+    start_addr += PGSIZE;
+  }
+
+  uvmunmap(p->pagetable, start_addr, page_to_unmap, 1);
+  return 0;
 }
 
 uint64
 sys_munmap(void)
 {
-  panic("NOT YET");
-  return 0;
+  uint64 len, addr;
+  if (argaddr(0, &addr) < 0 || argaddr(1, &len) < 0) {
+    return -1;
+  }
+
+  return unmmap(addr, len);
 }
 
 int
@@ -501,20 +614,20 @@ mmap_trap(struct proc *p)
   uint64 page_fault_addr;
   char *mem;
 
+  page_fault_addr = r_stval();
   for (int i = 0; i < VMASIZE; ++i) {
     if (VMAs[i].file && VMAs[i].pid == pid) {
       vma = &VMAs[i];
+      if (page_fault_addr < vma->addr || page_fault_addr >= vma->addr + vma->len) {
+        vma = 0;
+        continue;
+      }
+
       break;
     }
   }
 
   if (!vma) {
-    return 0;
-  }
-
-  page_fault_addr = r_stval();
-  if (page_fault_addr < vma->addr || page_fault_addr >= vma->addr + vma->len) {
-    printf("r_stval(): %p, addr: %p, len: %d\n", page_fault_addr, vma->addr, vma->len);
     return 0;
   }
 
@@ -551,4 +664,14 @@ mmap_trap(struct proc *p)
   iunlock(ip);
 
   return success;
+}
+
+void
+unmmap_by_pid(int pid)
+{
+  for (int i = 0; i < VMASIZE; ++i) {
+    if (VMAs[i].file && VMAs[i].pid == pid) {
+      unmmap(VMAs[i].addr, VMAs[i].len);
+    }
+  }
 }

@@ -34,6 +34,7 @@ int             fileread(struct file*, uint64, int n);
 int             filestat(struct file*, uint64 addr);
 int             filewrite(struct file*, uint64, int n);
 int             argfd(int n, int *pfd, struct file **pf);
+int             filewrite_withoff(struct file*, uint64, uint, int n);
 
 // fs.c
 void            fsinit(int);
@@ -173,6 +174,7 @@ int             copyout(pagetable_t, uint64, char *, uint64);
 int             copyin(pagetable_t, char *, uint64, uint64);
 int             copyinstr(pagetable_t, char *, uint64, uint64);
 int             mmap_trap(struct proc*);
+void            unmmap_by_pid(int pid);
 
 // plic.c
 void            plicinit(void);
