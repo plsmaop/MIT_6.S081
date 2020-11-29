@@ -175,6 +175,7 @@ int             copyin(pagetable_t, char *, uint64, uint64);
 int             copyinstr(pagetable_t, char *, uint64, uint64);
 int             mmap_trap(struct proc*);
 void            unmmap_by_pid(int pid);
+int             mmap_fork(int oldpid, int newpid);
 
 // plic.c
 void            plicinit(void);

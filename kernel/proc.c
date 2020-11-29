@@ -290,6 +290,12 @@ fork(void)
   // Cause fork to return 0 in the child.
   np->trapframe->a0 = 0;
 
+  if (mmap_fork(p->pid, np->pid) < 0) {
+    freeproc(np);
+    release(&np->lock);
+    return -1;
+  };
+
   // increment reference counts on open file descriptors.
   for(i = 0; i < NOFILE; i++)
     if(p->ofile[i])

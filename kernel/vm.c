@@ -525,13 +525,12 @@ sys_mmap(void)
     return 0xffffffffffffffff;
   }
 
-  filedup(f);
   p = myproc();
   addr = p->sz;
   p->sz += len; 
   vma->permission = prot;
   vma->flags = flags;
-  vma->file = f;
+  vma->file = filedup(f);
   vma->pid = p->pid;
   vma->addr = addr;
   vma->len = len;
@@ -556,7 +555,7 @@ unmmap(uint64 addr, uint len)
     return -1;
   }
 
-  if (vma->flags & MAP_SHARED) {
+  if ((vma->flags & MAP_SHARED) && (vma->permission & PROT_WRITE)) {
     // write back
     if (filewrite_withoff(vma->file, addr, addr - vma->original_addr, len) < 0) {
       panic("filewrite_withoff");
@@ -628,7 +627,7 @@ mmap_trap(struct proc *p)
   }
 
   if (!vma) {
-    return 0;
+    return -1;
   }
 
   mem = kalloc();
@@ -674,4 +673,37 @@ unmmap_by_pid(int pid)
       unmmap(VMAs[i].addr, VMAs[i].len);
     }
   }
+}           
+
+int
+mmap_fork(int oldpid, int newpid)
+{
+  int oldvma[VMASIZE] = {0}, ind = 0, emptyvma[VMASIZE] = {0}, emptyind = 0;
+  for (int i = 0; i < VMASIZE; ++i) {
+    if (VMAs[i].file && VMAs[i].pid == oldpid) {
+      oldvma[ind++] = i;
+      continue;
+    }
+
+    if (!VMAs[i].file) {
+      emptyvma[emptyind++] = i;
+    }
+  }
+
+  if (emptyind < ind) {
+    printf("no enough empty VMA\n");
+    return -1;
+  }
+
+  for (int i = 0; i < ind; ++i) {
+    struct VMA *old = &VMAs[oldvma[i]];
+    struct VMA *vma = &VMAs[emptyvma[i]];
+
+    memmove(vma, old, sizeof(struct VMA));
+    vma->pid = newpid;
+    vma->file = filedup(old->file);
+    printf("DUP from %d to %d\n", oldpid, newpid);
+  }
+
+  return 0;
 }
