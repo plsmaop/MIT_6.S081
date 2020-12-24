@@ -102,10 +102,10 @@ e1000_transmit(struct mbuf *m)
   // the TX descriptor ring so that the e1000 sends it. Stash
   // a pointer so that it can be freed after sending.
   //
-  
+
   acquire(&e1000_lock);
   uint32 next_pkt_ind = regs[E1000_TDT];
-  if (tx_ring[next_pkt_ind].status != E1000_TXD_STAT_DD) {
+  if (!(tx_ring[next_pkt_ind].status & E1000_TXD_STAT_DD)) {
     release(&e1000_lock);
     return -1;
   }
@@ -122,14 +122,9 @@ e1000_transmit(struct mbuf *m)
   new_mbuf->head = (char *)new_mbuf->buf + ((char *)m->head - (char *)m->buf);
 
   // set cmd flag
-  tx_ring[next_pkt_ind].cmd = 0;
   tx_ring[next_pkt_ind].addr = (uint64)new_mbuf->head;
   tx_ring[next_pkt_ind].length = new_mbuf->len;
-  tx_ring[next_pkt_ind].cmd |= E1000_TXD_CMD_RS;
-  if (!m->next) {
-    tx_ring[next_pkt_ind].cmd |= E1000_TXD_CMD_EOP;
-  }
-
+  tx_ring[next_pkt_ind].cmd = E1000_TXD_CMD_RS | E1000_TXD_CMD_EOP;
   regs[E1000_TDT] = (next_pkt_ind + 1) % TX_RING_SIZE;
 
   release(&e1000_lock);
@@ -146,21 +141,39 @@ e1000_recv(void)
   // Create and deliver an mbuf for each packet (using net_rx()).
   //
 
+  regs[E1000_IMS] = 0;
   acquire(&e1000_lock);
+  
+  struct mbuf *arr[RX_RING_SIZE];
+  memset(arr, 0, sizeof(struct mbuf*) * RX_RING_SIZE);
+
+  int arr_ind = 0;
   uint32 next_pkt_ind = (regs[E1000_RDT] + 1) % RX_RING_SIZE;
-  if (rx_ring[next_pkt_ind].status != E1000_RXD_STAT_DD) {
-    release(&e1000_lock);
-    return;
+
+  // read as many as possible
+  while (next_pkt_ind != regs[E1000_RDH]) {
+    if (!(rx_ring[next_pkt_ind].status & E1000_RXD_STAT_DD)) {
+      release(&e1000_lock);
+      return;
+    }
+
+    rx_mbufs[next_pkt_ind]->len = rx_ring[next_pkt_ind].length;
+    arr[arr_ind++] = rx_mbufs[next_pkt_ind];
+
+    rx_mbufs[next_pkt_ind] = mbufalloc(0);
+    rx_ring[next_pkt_ind].addr = (uint64)rx_mbufs[next_pkt_ind]->head;
+    rx_ring[next_pkt_ind].status = 0;
+    regs[E1000_RDT] = next_pkt_ind;
+    next_pkt_ind = (next_pkt_ind + 1) % RX_RING_SIZE;
   }
 
-  rx_mbufs[next_pkt_ind]->len = rx_ring[next_pkt_ind].length;
-  net_rx(rx_mbufs[next_pkt_ind]);
-  rx_mbufs[next_pkt_ind] = mbufalloc(0);
-  rx_ring[next_pkt_ind].addr = (uint64)rx_mbufs[next_pkt_ind]->head;
-  rx_ring[next_pkt_ind].status = 0;
-
-  regs[E1000_RDT] = next_pkt_ind;
   release(&e1000_lock);
+
+  for (int i = 0; i < arr_ind; ++i) {
+    net_rx(arr[i]);
+  }
+
+  return;
 }
 
 void
